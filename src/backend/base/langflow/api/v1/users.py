@@ -46,6 +46,36 @@ async def _require_user_administrator(user: User, *, operation_id: str | None = 
     )
 
 
+async def _ensure_local_credentials_allowed(
+    *,
+    authorization_service,
+    session,
+    target_user_id: UUID,
+    actor_user_id: UUID,
+    operation_id: str | None = None,
+) -> None:
+    if not await authorization_service.is_user_credentials_managed_externally(
+        session=session,
+        user_id=target_user_id,
+    ):
+        return
+    await audit_decision(
+        user_id=actor_user_id,
+        action="user:credentials:update",
+        obj=f"user:{target_user_id}",
+        result="deny",
+        details=administration_audit_details(
+            {"reason": "external_credentials_managed"},
+            operation_id=operation_id,
+        ),
+    )
+    raise HTTPException(
+        status_code=409,
+        detail="This user's credentials are managed by an external identity provider.",
+        headers={"X-Langflow-Error-Code": "external_credentials_managed"},
+    )
+
+
 async def _require_user_administrator_dependency(
     current_user: CurrentActiveUser,
     operation_id: OperationId = None,
@@ -266,6 +296,13 @@ async def patch_user(
     if update_password:
         if not is_user_administrator:
             raise HTTPException(status_code=400, detail="You can't change your password here")
+        await _ensure_local_credentials_allowed(
+            authorization_service=authorization_service,
+            session=session,
+            target_user_id=user_id,
+            actor_user_id=user.id,
+            operation_id=operation_id,
+        )
         user_update.password = get_auth_service().get_password_hash(user_update.password)
 
     # Pre-read lock hint; canonical user state may produce a different staged kind.
@@ -402,6 +439,12 @@ async def reset_password(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    await _ensure_local_credentials_allowed(
+        authorization_service=get_authorization_service(),
+        session=session,
+        target_user_id=user_id,
+        actor_user_id=user.id,
+    )
     auth = get_auth_service()
     if not auth.verify_password(password_reset.current_password, user.password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
