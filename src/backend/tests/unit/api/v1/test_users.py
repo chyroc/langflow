@@ -182,6 +182,16 @@ async def test_read_all_users(client: AsyncClient, logged_in_headers_super_user)
     assert "users" in result, "The result must have an 'users' key"
 
 
+async def test_read_all_users_denial_preserves_legacy_detail_and_adds_error_code(
+    client: AsyncClient, logged_in_headers
+):
+    response = await client.get("api/v1/users/", headers=logged_in_headers)
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json() == {"detail": "The user doesn't have enough privileges"}
+    assert response.headers["X-Langflow-Error-Code"] == "administration_denied"
+
+
 async def test_read_user_by_id(client: AsyncClient, logged_in_headers_super_user):
     create_response = await client.post(
         "api/v1/users/",
@@ -385,6 +395,35 @@ async def test_patch_user_self_deactivation_forbidden(client: AsyncClient, logge
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert "can't deactivate your own user account" in result["detail"]
+
+
+async def test_patch_user_password_denial_is_audited(client: AsyncClient, logged_in_headers, active_user, monkeypatch):
+    from langflow.api.v1 import users
+
+    audit = AsyncMock()
+    monkeypatch.setattr(users, "audit_decision", audit)
+    headers = {**logged_in_headers, "X-Langflow-Operation-ID": "cli-password-denial"}
+
+    response = await client.patch(
+        f"api/v1/users/{active_user.id}",
+        json={"password": "replacement-password"},  # pragma: allowlist secret
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"detail": "You can't change your password here"}
+    audit.assert_awaited_once_with(
+        user_id=active_user.id,
+        action="user:update",
+        obj=f"user:{active_user.id}",
+        result="deny",
+        details={
+            "fields_changed": ["password"],
+            "reason": "administration_required",
+            "source": "manual",
+            "operation_id": "cli-password-denial",
+        },
+    )
 
 
 async def test_patch_user_self_deactivation_forbidden_superuser(
