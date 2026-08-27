@@ -52,6 +52,7 @@ _LIST_MAX_LIMIT = 200
 _LIST_DEFAULT_LIMIT = 100
 _EXTERNALLY_MANAGED_DETAIL = "Externally managed memberships cannot be removed through the manual membership API"
 OperationId = Annotated[str | None, Header(alias="X-Langflow-Operation-ID", max_length=128)]
+_LEGACY_SUPERUSER_DENIAL = "Superuser required to administer teams."
 
 
 def _externally_managed_conflict() -> HTTPException:
@@ -70,6 +71,7 @@ async def _require_team_administrator(user, *, operation_id: str | None = None) 
         action="team:manage",
         obj="team:*",
         operation_id=operation_id,
+        denial_detail=_LEGACY_SUPERUSER_DENIAL,
     )
 
 
